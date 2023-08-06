@@ -85,7 +85,7 @@ struct LEVELDB_EXPORT Options {
   size_t write_buffer_size;
 
   size_t max_buffer_size;
-  int merge_threshold;
+  int merge_threshold = 50;
   int forced_compaction_size;
 
   // Number of open files that can be used by the DB.  You may need to
@@ -152,13 +152,13 @@ struct LEVELDB_EXPORT Options {
   // worth switching to kNoCompression.  Even if the input data is
   // incompressible, the kSnappyCompression implementation will
   // efficiently detect that and will switch to uncompressed mode.
-  CompressionType compression;
+  CompressionType compression = leveldb::kNoCompression;
 
   // EXPERIMENTAL: If true, append to existing MANIFEST and log files
   // when a database is opened.  This can significantly speed up open.
   //
   // Default: currently false, but may become true later.
-  bool reuse_logs;
+  bool reuse_logs = false;
 
   // If non-NULL, use the specified filter policy to reduce disk reads.
   // Many applications will benefit from passing the result of

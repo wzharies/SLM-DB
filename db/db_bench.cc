@@ -56,7 +56,7 @@ static const char* FLAGS_benchmarks =
 static int FLAGS_num = 1000000;
 
 // Number of read operations to do.  If negative, do FLAGS_num reads.
-static int FLAGS_reads = -1;
+static int FLAGS_reads = 1000000;
 
 // Number of concurrent threads to run.
 static int FLAGS_threads = 1;
@@ -98,7 +98,8 @@ static int FLAGS_open_files = 0;
 
 // Bloom filter bits per key.
 // Negative means use default settings.
-static int FLAGS_bloom_bits = -1;
+static int FLAGS_bloom_bits = 16;
+static int FLAGS_key_prefix = 0;
 
 // If true, do not destroy the existing database.  If you set this
 // flag and also specify a benchmark that wants a fresh database, that
@@ -120,6 +121,7 @@ static const char* FLAGS_db = NULL;
 // trace dir
 static std::string FLAGS_trace;
 static bool FLAGS_ycsb = false;
+static bool Throughput = false;
 
 // Trace operation for YCSB
 struct Operation {
@@ -190,6 +192,27 @@ static void AppendWithSpace(std::string* str, Slice msg) {
   }
   str->append(msg.data(), msg.size());
 }
+
+class KeyBuffer {
+ public:
+  KeyBuffer() {
+    assert(FLAGS_key_prefix < sizeof(buffer_));
+    memset(buffer_, 'a', FLAGS_key_prefix);
+  }
+  KeyBuffer& operator=(KeyBuffer& other) = delete;
+  KeyBuffer(KeyBuffer& other) = delete;
+
+  void Set(int k) {
+    // EncodeFixed64Reverse(buffer_ + FLAGS_key_prefix, k);
+    std::snprintf(buffer_ + FLAGS_key_prefix,
+                  sizeof(buffer_) - FLAGS_key_prefix, "%08d", k);
+  }
+
+  Slice slice() const { return Slice(buffer_, FLAGS_key_prefix + 8); }
+
+ private:
+  char buffer_[1024];
+};
 
 class Stats {
 private:
@@ -890,17 +913,41 @@ private:
     WriteBatch batch;
     Status s;
     int64_t bytes = 0;
+    int64_t bytes_this_batch = 0;
+    KeyBuffer key;
+
+    auto start_time = std::chrono::steady_clock::now();
+    auto last_report_time = start_time;
+    long long bytes_this_second = 0;
+
     for (int i = 0; i < num_; i += entries_per_batch_) {
       batch.Clear();
+      bytes_this_batch = 0;
+
       for (int j = 0; j < entries_per_batch_; j++) {
         const uint64_t k = seq ? i+j : (thread->rand.Next() % FLAGS_num);
-        char key[100];
-        snprintf(key, sizeof(key), config::key_format, k);
-        batch.Put(key, gen.Generate(value_size_));
-        bytes += value_size_ + strlen(key);
+        // char key[100];
+        key.Set(k);
+        // snprintf(key, sizeof(key), config::key_format, k);
+        batch.Put(key.slice(), gen.Generate(value_size_));
+        bytes_this_batch += value_size_ + key.slice().size();
         thread->stats.FinishedSingleOp();
       }
       s = db_->Write(write_options_, &batch);
+      if(Throughput){
+        bytes_this_second += bytes_this_batch;
+        auto now = std::chrono::steady_clock::now();
+        auto cur_elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+        auto last_elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(last_report_time - start_time).count();
+        auto diff_time = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_report_time).count();
+        if (cur_elapsed_time / 1000 != last_elapsed_time / 1000) {
+          double throughput = bytes_this_second * 1.0 / 1024 / 1024 / (diff_time / 1000.0);
+          std::cout << "Throughput " << cur_elapsed_time / 1000 << " second: " << throughput << " MB per second" << std::endl;
+          last_report_time = now;
+          bytes_this_second = 0;
+        }
+      }
+      bytes += bytes_this_batch;
       if (!s.ok()) {
         fprintf(stderr, "put error: %s\n", s.ToString().c_str());
         exit(1);
@@ -947,17 +994,24 @@ private:
     ReadOptions options;
     std::string value;
     int found = 0;
+    int64_t bytes = 0;
+    KeyBuffer key;
     for (int i = 0; i < reads_; i++) {
-      char key[100];
+      // char key[100];
       const uint64_t k = thread->rand.Next() % FLAGS_num;
-      snprintf(key, sizeof(key), config::key_format, k);
-      if (db_->Get(options, key, &value).ok()) {
+      key.Set(k);
+      // snprintf(key, sizeof(key), config::key_format, k);
+      if (db_->Get(options, key.slice(), &value).ok()) {
+        bytes += key.slice().size() + value.size();
         found++;
+      }else{
+        // bytes += key.slice().size();
       }
       thread->stats.FinishedSingleOp();
     }
+    thread->stats.AddBytes(bytes);
     char msg[100];
-    snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
+    snprintf(msg, sizeof(msg), "(%d of %d found)", found, reads_);
     thread->stats.AddMessage(msg);
   }
 
@@ -1193,6 +1247,7 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
+    uint64_t space;
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--benchmarks=")) {
       FLAGS_benchmarks = argv[i] + strlen("--benchmarks=");
@@ -1234,9 +1289,13 @@ int main(int argc, char** argv) {
       FLAGS_merge_threshold = n;
     } else if (sscanf(argv[i], "--range_size=%d%c", &n, &junk) == 1) {
       FLAGS_range_size = n;
-    } else if (sscanf(argv[i], "--nvm_size=%d%c", &n, &junk) == 1) {
-      nvm_size = n;
-      nvm_size = nvm_size * 1024 * 1024;
+    } else if (sscanf(argv[i], "--throughput=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      Throughput = n;
+    } else if (sscanf(argv[i], "--nvm_size=%ld%c", &space, &junk) == 1) {
+      nvm_size = space;
+      // std::cout<<nvm_size<<std::endl;
+      // nvm_size = nvm_size * 1024 * 1024;
     } else if (strncmp(argv[i], "--db=", 5) == 0) {
       FLAGS_db = argv[i] + 5;
     } else if (strncmp(argv[i], "--nvm_dir=", 10) == 0) {

@@ -1,5 +1,6 @@
 #include "leveldb/persistant_pool.h"
 
+#include <atomic>
 #include <libpmemcto.h>
 
 namespace leveldb {
@@ -9,6 +10,7 @@ namespace nvram {
 
 static PMEMctopool* pm_pool;
 static bool init = false;
+static std::atomic_bool exitted = false;
 static uint64_t allocs = 0;
 
 
@@ -26,12 +28,16 @@ void create_pool(const std::string& dir, const size_t& s) {
 
 void close_pool() {
   if (init) {
+    exitted = true;
     fprintf(stdout, "pmem allocs %lu\n", allocs);
     pmemcto_close(pm_pool);
   }
 }
 
 void pfree(void* ptr) {
+  if (exitted) {
+    return ;
+  }
   if (!init) {
     free(ptr);
   } else {
@@ -41,6 +47,9 @@ void pfree(void* ptr) {
 
 void* pmalloc(size_t size) {
   void* ptr;
+  if(exitted) {
+    return nullptr;
+  }
   if (!init) {
     ptr = malloc(size);
   } else {

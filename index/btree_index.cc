@@ -20,6 +20,9 @@ void BtreeIndex::Insert(const entry_key_t& key, const IndexMeta& meta) {
   edit_->AddToRecoveryList(meta.file_number);
   // check btree if updated
   IndexMeta* ptr = (IndexMeta*) nvram::pmalloc(sizeof(IndexMeta));
+  if(ptr == nullptr){
+    exit(-1);
+  }
   ptr->size = meta.size;
   ptr->file_number = meta.file_number;
   ptr->offset = meta.offset;

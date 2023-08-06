@@ -154,6 +154,7 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
 }
 
 DBImpl::~DBImpl() {
+  exit(-1);
   // Wait for background work to finish
   mutex_.Lock();
   shutting_down_.Release_Store(this);  // Any non-NULL value is ok
@@ -1217,6 +1218,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
     } else if (allow_delay && versions_->CompactionSize() >= config::SlowdownWritesTrigger) {
       mutex_.Unlock();
       stats_.total_stalls++;
+      // std::cout<<"versions_->CompactionSize()"<<versions_->CompactionSize()<<std::endl;
       env_->SleepForMicroseconds(1000);
       allow_delay = false;
       mutex_.Lock();
@@ -1228,11 +1230,14 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // We have filled up the current memtable, but the previous
       // one is still being compacted, so we wait.
       Log(options_.info_log, "Current memtable full; waiting...\n");
+      // std::cout<<"Current memtable full; waiting..."<<std::endl;
       bg_cv_.Wait();
     } else if (versions_->CompactionSize() >= config::StopWritesTrigger) {
       Log(options_.info_log, "Too many file for compaction, waiting..." );
+      // std::cout<<"Too many file for compaction, waiting..."<<std::endl;
       bg_cv_.Wait();
     } else {
+      // std::cout<<"memtable"<<std::endl;
       // Attempt to switch to a new memtable and trigger compaction of old
       if (!options_.disable_recovery_log) {
         assert(versions_->PrevLogNumber() == 0);
@@ -1432,6 +1437,7 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
 
 void DBImpl::WaitComp() {
   while (!env_->IsSchedulerEmpty() || bg_compaction_scheduled_) {
+    // std::cout<<"sleep2"<<std::endl;
     env_->SleepForMicroseconds(1000000);
     if (!versions_->State()) {
       break;

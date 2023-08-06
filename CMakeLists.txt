@@ -22,7 +22,7 @@ include_directories(
 add_compile_options(
         -Wno-sign-compare
         -std=c++17
-        -O2
+        # -O2
         -DNDEBUG
 )
 
